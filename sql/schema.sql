@@ -31,7 +31,11 @@ CREATE TABLE IF NOT EXISTS model_predictions (
     predicted_std   NUMERIC,           -- null for baselines, populated for GPR
     lower_bound     NUMERIC,
     upper_bound     NUMERIC,
-    created_at      TIMESTAMP DEFAULT now()
+    created_at      TIMESTAMP DEFAULT now(),
+    -- Model training gets re-run often while tuning. Without this, each re-run
+    -- appends a second set of predictions and every downstream RMSE/AVG silently
+    -- averages across runs.
+    UNIQUE (location_id, obs_date, model_name)
 );
 
 -- Evaluation summary — feeds the Power BI comparison view
@@ -42,5 +46,29 @@ CREATE TABLE IF NOT EXISTS model_evaluation (
     rmse          NUMERIC,
     mae           NUMERIC,
     picp          NUMERIC,   -- prediction interval coverage probability, GPR only
-    evaluated_at  TIMESTAMP DEFAULT now()
+    evaluated_at  TIMESTAMP DEFAULT now(),
+    -- One current score per model per location; re-evaluating replaces it.
+    UNIQUE (model_name, location_id)
 );
+
+-- Retrofit the uniqueness constraints above onto a database created before they
+-- were added. CREATE TABLE IF NOT EXISTS skips existing tables entirely, so the
+-- constraints would otherwise never appear on an already-provisioned database.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'model_predictions_location_id_obs_date_model_name_key'
+    ) THEN
+        ALTER TABLE model_predictions
+            ADD CONSTRAINT model_predictions_location_id_obs_date_model_name_key
+            UNIQUE (location_id, obs_date, model_name);
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'model_evaluation_model_name_location_id_key'
+    ) THEN
+        ALTER TABLE model_evaluation
+            ADD CONSTRAINT model_evaluation_model_name_location_id_key
+            UNIQUE (model_name, location_id);
+    END IF;
+END $$;

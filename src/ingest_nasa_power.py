@@ -9,7 +9,11 @@ Usage:
     .venv/bin/python3 src/ingest_nasa_power.py
 """
 
+import json
+import re
 import time
+from datetime import date, datetime
+from pathlib import Path
 
 import pandas as pd
 import requests
@@ -18,6 +22,11 @@ from psycopg2.extras import execute_values
 from db import connect_with_retry, load_db_config, log
 
 NASA_POWER_URL = "https://power.larc.nasa.gov/api/temporal/daily/point"
+
+# Raw API responses are cached here before anything is written to the database, so
+# a degraded NASA response can never leave us with neither good rows nor a copy of
+# what was actually returned.
+RAW_DIR = Path(__file__).resolve().parent.parent / "data" / "raw"
 
 # NASA POWER parameter code -> our column name. Codes confirmed against a live
 # test call; ghi is returned in kWh/m^2/day.
@@ -43,6 +52,26 @@ END_DATE = "2026-05-31"
 VALUE_COLUMNS = list(NASA_PARAM_MAP.values())
 
 
+def _to_api_date(value: str) -> str:
+    """Convert YYYY-MM-DD to the YYYYMMDD the API expects, rejecting bad input."""
+    return datetime.strptime(value, "%Y-%m-%d").strftime("%Y%m%d")
+
+
+def expected_day_count(start_date: str, end_date: str) -> int:
+    """Inclusive day count for the range, so a short response can be detected."""
+    start = datetime.strptime(start_date, "%Y-%m-%d").date()
+    end = datetime.strptime(end_date, "%Y-%m-%d").date()
+    return (end - start).days + 1
+
+
+def _cache_raw_response(payload: dict, name: str) -> None:
+    """Write the raw API response to data/raw/ before anything touches the DB."""
+    RAW_DIR.mkdir(parents=True, exist_ok=True)
+    slug = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
+    path = RAW_DIR / f"{slug}.json"
+    path.write_text(json.dumps(payload, indent=2))
+
+
 def fetch_nasa_power_data(
     lat: float,
     lon: float,
@@ -50,8 +79,8 @@ def fetch_nasa_power_data(
     end_date: str,
     max_retries: int = 3,
     backoff_base_s: int = 2,
-) -> pd.DataFrame:
-    """Fetch one location's daily data and return a tidy DataFrame.
+) -> tuple[pd.DataFrame, dict]:
+    """Fetch one location's daily data; return (tidy DataFrame, raw payload).
 
     Retries with exponential backoff on network errors or non-2xx responses.
     Missing readings (-999) become None so they land in Postgres as NULL.
@@ -61,9 +90,13 @@ def fetch_nasa_power_data(
         "community": "RE",
         "longitude": lon,
         "latitude": lat,
-        "start": start_date.replace("-", ""),
-        "end": end_date.replace("-", ""),
+        "start": _to_api_date(start_date),
+        "end": _to_api_date(end_date),
         "format": "JSON",
+        # Pinned rather than left to the API default: LST means obs_date is a local
+        # solar day at each site. A UTC day would straddle two local daylight
+        # periods (Phoenix is UTC-7) and quietly corrupt the target variable.
+        "time-standard": "LST",
     }
 
     last_error = None
@@ -84,19 +117,37 @@ def fetch_nasa_power_data(
             f"NASA POWER request failed after {max_retries} attempts. Last error: {last_error}"
         )
 
+    # NASA reports parameter-level problems here even on an HTTP 200.
+    if payload.get("messages"):
+        log(f"  NASA POWER returned messages: {payload['messages']}")
+
     parameter_block = payload["properties"]["parameter"]
+
+    missing_params = [code for code in NASA_PARAM_MAP if code not in parameter_block]
+    if missing_params:
+        raise RuntimeError(
+            f"NASA POWER response is missing requested parameter(s): {missing_params}. "
+            f"Returned: {sorted(parameter_block)}"
+        )
 
     df = pd.DataFrame(parameter_block).rename(columns=NASA_PARAM_MAP)
     df.index = pd.to_datetime(df.index, format="%Y%m%d").date
     df.index.name = "obs_date"
     df = df.reset_index()
 
+    expected = expected_day_count(start_date, end_date)
+    if len(df) != expected:
+        raise RuntimeError(
+            f"NASA POWER returned {len(df)} days for {start_date}..{end_date}, "
+            f"expected {expected}. Refusing to write a partial pull over existing rows."
+        )
+
     # Convert the -999 sentinel to NULL. Gap-filling belongs to Day 2 wrangling,
     # not here — this only marks what is genuinely missing.
     for column in VALUE_COLUMNS:
         df.loc[df[column].sub(FILL_VALUE).abs() < 0.01, column] = None
 
-    return df[["obs_date"] + VALUE_COLUMNS]
+    return df[["obs_date"] + VALUE_COLUMNS], payload
 
 
 def get_location_id_map(conn) -> dict:
@@ -162,7 +213,14 @@ def main() -> None:
                 )
 
             log(f"{name}: fetching {START_DATE} to {END_DATE}...")
-            df = fetch_nasa_power_data(location["lat"], location["lon"], START_DATE, END_DATE)
+            df, payload = fetch_nasa_power_data(
+                location["lat"], location["lon"], START_DATE, END_DATE
+            )
+
+            # Cache before writing: the upsert overwrites existing values, so this
+            # is the only copy of what NASA actually returned this run.
+            _cache_raw_response(payload, name)
+
             written = upsert_observations(df, location_ids[name], conn)
             missing = int(df[VALUE_COLUMNS].isna().any(axis=1).sum())
             log(f"{name}: {written} rows upserted ({missing} rows with missing values)")

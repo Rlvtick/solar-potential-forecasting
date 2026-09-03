@@ -15,5 +15,8 @@ venv/
 # Environment / secrets
 .env
 
+# Cached raw API responses — re-fetchable, not source
+data/raw/
+
 # OS
 .DS_Store

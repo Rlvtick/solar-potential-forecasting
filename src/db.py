@@ -6,9 +6,14 @@ place that knows how to read credentials and open a connection.
 
 import os
 import time
+from pathlib import Path
 
 import psycopg2
 from dotenv import load_dotenv
+
+# Resolved from this file, not the working directory, so the scripts work no
+# matter where they are invoked from.
+ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
 
 # The container always listens on 5432 internally; docker-compose.yml publishes it
 # on POSTGRES_PORT (5433 by default, to avoid a PostgreSQL already on the host).
@@ -26,9 +31,26 @@ FATAL_ERROR_MARKERS = (
 
 def load_db_config() -> dict:
     """Read Postgres credentials and port from .env into a psycopg2-ready dict."""
-    load_dotenv()
+    if not ENV_PATH.exists():
+        raise RuntimeError(
+            f"No .env file found at {ENV_PATH}. Copy .env.example to .env and fill "
+            "in the database credentials."
+        )
+
+    # override=True so an exported shell variable cannot silently shadow .env —
+    # that is the failure mode that produced the 5432/5433 port confusion.
+    load_dotenv(ENV_PATH, override=True)
+
+    missing = [
+        key
+        for key in ("POSTGRES_DB", "POSTGRES_USER", "POSTGRES_PASSWORD")
+        if not os.environ.get(key)
+    ]
+    if missing:
+        raise RuntimeError(f"{ENV_PATH} is missing required key(s): {', '.join(missing)}")
+
     return {
-        "host": DB_HOST,
+        "host": os.environ.get("POSTGRES_HOST", DB_HOST),
         "port": int(os.environ.get("POSTGRES_PORT", DEFAULT_DB_PORT)),
         "dbname": os.environ["POSTGRES_DB"],
         "user": os.environ["POSTGRES_USER"],
