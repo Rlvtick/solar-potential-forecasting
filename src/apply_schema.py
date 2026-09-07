@@ -1,7 +1,4 @@
-"""Apply the database schema and seed the three forecast locations.
-
-Safe to re-run: the schema uses CREATE TABLE IF NOT EXISTS and the seed uses
-ON CONFLICT (name) DO NOTHING.
+"""Set up the schema, seed locations, and build the feature view.
 
 Usage:
     docker compose up -d db
@@ -19,7 +16,7 @@ FEATURES_FILE = SQL_DIR / "features.sql"
 
 
 def run_sql_file(conn, path: Path) -> None:
-    """Execute every statement in a .sql file as one transaction."""
+    """Run a whole .sql file as one transaction."""
     sql = path.read_text()
     with conn.cursor() as cur:
         cur.execute(sql)

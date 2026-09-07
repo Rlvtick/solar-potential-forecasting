@@ -1,9 +1,5 @@
 """Pull daily solar/weather data from NASA POWER into daily_observations.
 
-One API call per location covers the full date range (confirmed: 730 days come
-back in a single response, so no chunking is needed). Safe to re-run — rows are
-upserted on (location_id, obs_date).
-
 Usage:
     .venv/bin/python3 src/apply_schema.py     # must run first
     .venv/bin/python3 src/ingest_nasa_power.py
@@ -12,7 +8,7 @@ Usage:
 import json
 import re
 import time
-from datetime import date, datetime
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -23,24 +19,23 @@ from db import connect_with_retry, load_db_config, log
 
 NASA_POWER_URL = "https://power.larc.nasa.gov/api/temporal/daily/point"
 
-# Raw API responses are cached here before anything is written to the database, so
-# a degraded NASA response can never leave us with neither good rows nor a copy of
-# what was actually returned.
+# Cache the raw responses here before writing anything, so a bad pull can still be
+# inspected after the fact.
 RAW_DIR = Path(__file__).resolve().parent.parent / "data" / "raw"
 
-# NASA POWER parameter code -> our column name. Codes confirmed against a live
-# test call; ghi is returned in kWh/m^2/day.
+# NASA's parameter codes mapped to our column names. GHI comes back in kWh/m^2/day,
+# though that depends on community=RE below.
 NASA_PARAM_MAP = {
     "ALLSKY_SFC_SW_DWN": "ghi",
     "T2M": "temperature_c",
-    "WS2M": "wind_speed_ms",  # 2m to match T2M's measurement height
+    "WS2M": "wind_speed_ms",  # 2m rather than 10m, to match the height T2M is measured at
     "CLOUD_AMT": "cloud_cover_pct",
 }
 
-# NASA POWER uses -999.0 for missing readings (declared in the response header).
 FILL_VALUE = -999.0
 
-# Locked project parameters. Names must match sql/seed_locations.sql exactly.
+# These names have to match sql/seed_locations.sql exactly, since that's how each
+# location gets looked up.
 LOCATIONS = [
     {"name": "Phoenix, AZ, USA", "lat": 33.4484, "lon": -112.0740},
     {"name": "Melbourne, AU", "lat": -37.8136, "lon": 144.9631},
@@ -53,19 +48,19 @@ VALUE_COLUMNS = list(NASA_PARAM_MAP.values())
 
 
 def _to_api_date(value: str) -> str:
-    """Convert YYYY-MM-DD to the YYYYMMDD the API expects, rejecting bad input."""
+    """Convert YYYY-MM-DD into the YYYYMMDD the API expects, erroring on anything malformed."""
     return datetime.strptime(value, "%Y-%m-%d").strftime("%Y%m%d")
 
 
 def expected_day_count(start_date: str, end_date: str) -> int:
-    """Inclusive day count for the range, so a short response can be detected."""
+    """How many days the range covers, inclusive — used to spot a short response."""
     start = datetime.strptime(start_date, "%Y-%m-%d").date()
     end = datetime.strptime(end_date, "%Y-%m-%d").date()
     return (end - start).days + 1
 
 
 def _cache_raw_response(payload: dict, name: str) -> None:
-    """Write the raw API response to data/raw/ before anything touches the DB."""
+    """Write the untouched API response to data/raw/, named after the location."""
     RAW_DIR.mkdir(parents=True, exist_ok=True)
     slug = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
     path = RAW_DIR / f"{slug}.json"
@@ -80,11 +75,7 @@ def fetch_nasa_power_data(
     max_retries: int = 3,
     backoff_base_s: int = 2,
 ) -> tuple[pd.DataFrame, dict]:
-    """Fetch one location's daily data; return (tidy DataFrame, raw payload).
-
-    Retries with exponential backoff on network errors or non-2xx responses.
-    Missing readings (-999) become None so they land in Postgres as NULL.
-    """
+    """Fetch one location's daily data. Returns (tidy DataFrame, raw payload)."""
     params = {
         "parameters": ",".join(NASA_PARAM_MAP),
         "community": "RE",
@@ -93,9 +84,8 @@ def fetch_nasa_power_data(
         "start": _to_api_date(start_date),
         "end": _to_api_date(end_date),
         "format": "JSON",
-        # Pinned rather than left to the API default: LST means obs_date is a local
-        # solar day at each site. A UTC day would straddle two local daylight
-        # periods (Phoenix is UTC-7) and quietly corrupt the target variable.
+        # Ask for local solar time explicitly — on UTC a single "day" at Phoenix
+        # would span two local daylight periods.
         "time-standard": "LST",
     }
 
@@ -117,7 +107,7 @@ def fetch_nasa_power_data(
             f"NASA POWER request failed after {max_retries} attempts. Last error: {last_error}"
         )
 
-    # NASA reports parameter-level problems here even on an HTTP 200.
+    # NASA reports per-parameter problems in here even when the request itself succeeds.
     if payload.get("messages"):
         log(f"  NASA POWER returned messages: {payload['messages']}")
 
@@ -142,8 +132,8 @@ def fetch_nasa_power_data(
             f"expected {expected}. Refusing to write a partial pull over existing rows."
         )
 
-    # Convert the -999 sentinel to NULL. Gap-filling belongs to Day 2 wrangling,
-    # not here — this only marks what is genuinely missing.
+    # -999 is NASA's 'no reading' marker. Flag those as missing and leave the actual
+    # gap-filling decision to the wrangling step.
     for column in VALUE_COLUMNS:
         df.loc[df[column].sub(FILL_VALUE).abs() < 0.01, column] = None
 
@@ -151,19 +141,15 @@ def fetch_nasa_power_data(
 
 
 def get_location_id_map(conn) -> dict:
-    """Return {location name: id} for the seeded locations."""
+    """Return {location name: id}."""
     with conn.cursor() as cur:
         cur.execute("SELECT name, id FROM locations")
         return dict(cur.fetchall())
 
 
 def _to_sql_null(value):
-    """Convert pandas' NaN to None so it lands in Postgres as NULL.
-
-    Assigning None into a float column leaves NaN, not None, and psycopg2 adapts
-    NaN into a literal NUMERIC 'NaN' — which IS NOT NULL, and poisons AVG()/model
-    input silently. This is the boundary where that has to be corrected.
-    """
+    """Swap NaN for None — otherwise psycopg2 writes NUMERIC 'NaN' into the column
+    instead of an actual NULL."""
     return None if value is None or pd.isna(value) else value
 
 
@@ -217,8 +203,7 @@ def main() -> None:
                 location["lat"], location["lon"], START_DATE, END_DATE
             )
 
-            # Cache before writing: the upsert overwrites existing values, so this
-            # is the only copy of what NASA actually returned this run.
+            # Cache before the upsert, since the upsert overwrites whatever's already stored.
             _cache_raw_response(payload, name)
 
             written = upsert_observations(df, location_ids[name], conn)

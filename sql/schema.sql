@@ -1,13 +1,13 @@
--- Locations being forecast
+-- The three sites we forecast for.
 CREATE TABLE IF NOT EXISTS locations (
     id          SERIAL PRIMARY KEY,
-    name        TEXT NOT NULL UNIQUE,   -- deviation from DESIGN.md draft: UNIQUE added for idempotent seeding
+    name        TEXT NOT NULL UNIQUE,   -- UNIQUE gives the seed something to conflict on
     latitude    NUMERIC(8,5) NOT NULL,
     longitude   NUMERIC(8,5) NOT NULL,
     notes       TEXT
 );
 
--- Raw daily observations pulled from NASA POWER
+-- Raw daily readings from NASA POWER, untouched apart from -999 becoming NULL.
 CREATE TABLE IF NOT EXISTS daily_observations (
     id                SERIAL PRIMARY KEY,
     location_id       INT REFERENCES locations(id),
@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS daily_observations (
     UNIQUE (location_id, obs_date)
 );
 
--- Model predictions — baseline and GPR both write here
+-- Both the baselines and GPR write their predictions here.
 CREATE TABLE IF NOT EXISTS model_predictions (
     id              SERIAL PRIMARY KEY,
     location_id     INT REFERENCES locations(id),
@@ -32,13 +32,12 @@ CREATE TABLE IF NOT EXISTS model_predictions (
     lower_bound     NUMERIC,
     upper_bound     NUMERIC,
     created_at      TIMESTAMP DEFAULT now(),
-    -- Model training gets re-run often while tuning. Without this, each re-run
-    -- appends a second set of predictions and every downstream RMSE/AVG silently
-    -- averages across runs.
+    -- Keeps a re-run from stacking a second set of predictions on top of the first,
+    -- which would quietly skew every metric computed off this table.
     UNIQUE (location_id, obs_date, model_name)
 );
 
--- Evaluation summary — feeds the Power BI comparison view
+-- Summary scores per model and location — this is what Power BI reads.
 CREATE TABLE IF NOT EXISTS model_evaluation (
     id            SERIAL PRIMARY KEY,
     model_name    TEXT NOT NULL,
@@ -47,13 +46,12 @@ CREATE TABLE IF NOT EXISTS model_evaluation (
     mae           NUMERIC,
     picp          NUMERIC,   -- prediction interval coverage probability, GPR only
     evaluated_at  TIMESTAMP DEFAULT now(),
-    -- One current score per model per location; re-evaluating replaces it.
+    -- One score per model per location, so re-evaluating overwrites rather than appends.
     UNIQUE (model_name, location_id)
 );
 
--- Retrofit the uniqueness constraints above onto a database created before they
--- were added. CREATE TABLE IF NOT EXISTS skips existing tables entirely, so the
--- constraints would otherwise never appear on an already-provisioned database.
+-- CREATE TABLE IF NOT EXISTS won't touch a table that already exists, so the two
+-- constraints above need adding separately on any database built before them.
 DO $$
 BEGIN
     IF NOT EXISTS (

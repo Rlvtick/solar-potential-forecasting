@@ -1,8 +1,4 @@
-"""Shared Postgres connection helpers.
-
-Both apply_schema.py and ingest_nasa_power.py use these so there is exactly one
-place that knows how to read credentials and open a connection.
-"""
+"""Postgres connection helpers shared by the other scripts."""
 
 import os
 import time
@@ -11,17 +7,16 @@ from pathlib import Path
 import psycopg2
 from dotenv import load_dotenv
 
-# Resolved from this file, not the working directory, so the scripts work no
-# matter where they are invoked from.
+# Resolved from this file rather than the working directory, so the scripts work
+# no matter where they're run from.
 ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
 
-# The container always listens on 5432 internally; docker-compose.yml publishes it
-# on POSTGRES_PORT (5433 by default, to avoid a PostgreSQL already on the host).
+# The container always listens on 5432 internally; compose publishes it on 5433
+# so it doesn't collide with a Postgres already installed on the host.
 DB_HOST = "localhost"
 DEFAULT_DB_PORT = 5433
 
-# Connection errors that will never resolve by waiting — retrying these just hides
-# the real problem behind a misleading "is the database running?" message.
+# Worth failing on immediately — waiting won't fix a wrong password or a missing role.
 FATAL_ERROR_MARKERS = (
     "does not exist",
     "password authentication failed",
@@ -30,15 +25,14 @@ FATAL_ERROR_MARKERS = (
 
 
 def load_db_config() -> dict:
-    """Read Postgres credentials and port from .env into a psycopg2-ready dict."""
+    """Read credentials from .env into a psycopg2-ready dict."""
     if not ENV_PATH.exists():
         raise RuntimeError(
             f"No .env file found at {ENV_PATH}. Copy .env.example to .env and fill "
             "in the database credentials."
         )
 
-    # override=True so an exported shell variable cannot silently shadow .env —
-    # that is the failure mode that produced the 5432/5433 port confusion.
+    # override=True so a variable left exported in the shell can't quietly win over .env.
     load_dotenv(ENV_PATH, override=True)
 
     missing = [
@@ -61,9 +55,8 @@ def load_db_config() -> dict:
 def connect_with_retry(config: dict, max_attempts: int = 5, delay_s: int = 2):
     """Connect to Postgres, retrying while the container finishes starting up.
 
-    `docker compose up -d db` returns before Postgres accepts connections, so a
-    few short retries smooth over that race. After max_attempts, raise with a
-    message that points at the fix rather than a raw connection stack trace.
+    `docker compose up -d db` returns before Postgres is actually accepting
+    connections, so the first attempt or two can legitimately fail.
     """
     port = config["port"]
     last_error = None
@@ -74,8 +67,6 @@ def connect_with_retry(config: dict, max_attempts: int = 5, delay_s: int = 2):
         except psycopg2.OperationalError as exc:
             message = str(exc)
 
-            # Credentials/role problems never fix themselves — fail immediately and
-            # surface the real reason instead of retrying into a generic timeout.
             if any(marker in message for marker in FATAL_ERROR_MARKERS):
                 raise RuntimeError(
                     f"Postgres at {DB_HOST}:{port} rejected the connection: {message.strip()}\n"

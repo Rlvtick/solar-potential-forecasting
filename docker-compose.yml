@@ -7,8 +7,8 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
     ports:
-      # Host port 5433 avoids clashing with a PostgreSQL already installed on the
-      # host (Homebrew postgresql@14 owns 5432 on this machine).
+      # Published on 5433 rather than 5432, to stay clear of any Postgres already
+      # installed on the host.
       - "${POSTGRES_PORT:-5433}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
