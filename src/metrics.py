@@ -35,3 +35,18 @@ def mae(actual, predicted) -> float:
     """Mean absolute error."""
     actual, predicted = _as_pair(actual, predicted)
     return float(np.mean(np.abs(actual - predicted)))
+
+
+def picp(actual, lower, upper) -> float:
+    """Share of actuals falling inside the prediction interval.
+
+    For a nominal 95% interval this should come out near 0.95 — much lower means
+    the model is claiming more certainty than it has earned.
+    """
+    actual, lower = _as_pair(actual, lower)
+    _, upper = _as_pair(actual, upper)
+
+    if np.any(upper < lower):
+        raise ValueError("upper bound below lower bound")
+
+    return float(np.mean((actual >= lower) & (actual <= upper)))
