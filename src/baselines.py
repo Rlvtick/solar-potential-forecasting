@@ -8,6 +8,7 @@ Usage:
     .venv/bin/python3 src/baselines.py
 """
 
+import numpy as np
 from sklearn.linear_model import LinearRegression
 
 from data import FEATURE_COLUMNS, TARGET_COLUMN, load_features, save_evaluation, save_predictions
@@ -31,7 +32,15 @@ def predict_linear(train_df, test_df):
 
 
 def to_prediction_rows(test_df, predicted):
-    """Shape predictions for save_predictions. Baselines carry no uncertainty."""
+    """Shape predictions for save_predictions. Baselines carry no uncertainty.
+
+    The length check matters because zip() would quietly drop the tail if the two
+    ever fell out of step, mis-attributing predictions with nothing to show for it.
+    """
+    predicted = np.ravel(predicted)
+    if len(predicted) != len(test_df):
+        raise ValueError(f"got {len(predicted)} predictions for {len(test_df)} rows")
+
     return [
         (int(row.location_id), row.obs_date, float(value), None, None, None)
         for row, value in zip(test_df.itertuples(), predicted)

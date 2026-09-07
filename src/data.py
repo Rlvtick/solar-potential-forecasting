@@ -38,6 +38,12 @@ def load_features(conn) -> pd.DataFrame:
     return df
 
 
+def to_sql_null(value):
+    """Swap NaN for None — psycopg2 writes NaN as NUMERIC 'NaN', which is not NULL
+    and slips past both the NOT NULL constraint and any IS NULL audit query."""
+    return None if value is None or pd.isna(value) else value
+
+
 def save_predictions(conn, model_name: str, rows: list) -> int:
     """Store predictions as (location_id, obs_date, predicted_ghi, std, lower, upper).
 
@@ -56,9 +62,19 @@ def save_predictions(conn, model_name: str, rows: list) -> int:
             created_at    = now()
     """
     values = [
-        (location_id, obs_date, model_name, predicted, std, lower, upper)
+        (
+            location_id,
+            obs_date,
+            model_name,
+            to_sql_null(predicted),
+            to_sql_null(std),
+            to_sql_null(lower),
+            to_sql_null(upper),
+        )
         for location_id, obs_date, predicted, std, lower, upper in rows
     ]
+    if any(row[3] is None for row in values):
+        raise ValueError(f"{model_name}: refusing to store a NULL/NaN prediction")
     with conn.cursor() as cur:
         execute_values(cur, sql, values)
     conn.commit()
@@ -82,9 +98,9 @@ def save_evaluation(conn, model_name: str, location_id: int, scores: dict) -> No
             (
                 model_name,
                 location_id,
-                scores.get("rmse"),
-                scores.get("mae"),
-                scores.get("picp"),
+                to_sql_null(scores.get("rmse")),
+                to_sql_null(scores.get("mae")),
+                to_sql_null(scores.get("picp")),
             ),
         )
     conn.commit()

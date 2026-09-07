@@ -45,4 +45,10 @@ SELECT
     CASE WHEN obs_date >= DATE '2026-03-01' THEN 'test' ELSE 'train' END AS split
 FROM lagged
 -- Drops each location's first day, which has no previous day to draw features from.
-WHERE prev_ghi IS NOT NULL;
+-- Every feature is checked, not just prev_ghi: a NULL slipping into a test row
+-- would produce a NaN prediction rather than an error.
+WHERE prev_ghi IS NOT NULL
+  AND prev_temperature_c IS NOT NULL
+  AND prev_wind_speed_ms IS NOT NULL
+  AND prev_cloud_cover_pct IS NOT NULL
+  AND target_ghi IS NOT NULL;
