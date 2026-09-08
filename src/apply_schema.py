@@ -13,6 +13,7 @@ SQL_DIR = Path(__file__).resolve().parent.parent / "sql"
 SCHEMA_FILE = SQL_DIR / "schema.sql"
 SEED_FILE = SQL_DIR / "seed_locations.sql"
 FEATURES_FILE = SQL_DIR / "features.sql"
+REPORTING_FILE = SQL_DIR / "reporting.sql"
 
 
 def run_sql_file(conn, path: Path) -> None:
@@ -30,6 +31,7 @@ def main() -> None:
         run_sql_file(conn, SCHEMA_FILE)
         run_sql_file(conn, SEED_FILE)
         run_sql_file(conn, FEATURES_FILE)
+        run_sql_file(conn, REPORTING_FILE)
 
         with conn.cursor() as cur:
             cur.execute(

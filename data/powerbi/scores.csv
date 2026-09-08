@@ -1,0 +1,10 @@
+location_name,model_name,model_label,rmse,mae,picp,nrmse
+"Jakarta, ID",baseline_persistence,Persistence,0.6646,0.5268,,0.1431
+"Jakarta, ID",gpr,Gaussian Process,0.6779,0.5334,0.9891,0.1459
+"Jakarta, ID",baseline_linear,Linear Regression,0.7326,0.5872,,0.1577
+"Melbourne, AU",gpr,Gaussian Process,0.901,0.7098,0.9783,0.2562
+"Melbourne, AU",baseline_linear,Linear Regression,0.9901,0.7607,,0.2815
+"Melbourne, AU",baseline_persistence,Persistence,1.0922,0.7577,,0.3105
+"Phoenix, AZ, USA",gpr,Gaussian Process,0.862,0.6332,0.913,0.1248
+"Phoenix, AZ, USA",baseline_linear,Linear Regression,0.8806,0.6496,,0.1275
+"Phoenix, AZ, USA",baseline_persistence,Persistence,1.123,0.7205,,0.1626
