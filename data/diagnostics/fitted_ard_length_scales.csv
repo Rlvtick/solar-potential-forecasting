@@ -1,0 +1,19 @@
+location_name,feature,length_scale,effectively_ignored
+"Jakarta, ID",doy_sin,4.617035044321847,False
+"Jakarta, ID",prev_ghi,8.250819287248088,False
+"Jakarta, ID",prev_cloud_cover_pct,19.101447632502598,False
+"Jakarta, ID",prev_wind_speed_ms,34.38823209605241,False
+"Jakarta, ID",doy_cos,1182.309878299899,False
+"Jakarta, ID",prev_temperature_c,1629.4316017950518,False
+"Melbourne, AU",doy_cos,4.258404707044819,False
+"Melbourne, AU",prev_wind_speed_ms,7.358583608254769,False
+"Melbourne, AU",prev_temperature_c,10.41190647295724,False
+"Melbourne, AU",prev_cloud_cover_pct,14.434259872434378,False
+"Melbourne, AU",doy_sin,20306.016198480018,True
+"Melbourne, AU",prev_ghi,45190.893252822636,True
+"Phoenix, AZ, USA",doy_cos,9.926805291276189,False
+"Phoenix, AZ, USA",prev_cloud_cover_pct,31.90613183134992,False
+"Phoenix, AZ, USA",doy_sin,44.07032117239981,False
+"Phoenix, AZ, USA",prev_temperature_c,102.38688111277212,False
+"Phoenix, AZ, USA",prev_wind_speed_ms,334.48036680229956,False
+"Phoenix, AZ, USA",prev_ghi,45190.95765676918,True
